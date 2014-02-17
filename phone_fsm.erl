@@ -62,7 +62,7 @@ inbound(FsmPid) -> gen_fsm:send_event(FsmPid, {event, inbound, self()}).
 %%--------------------------------------------------------------------
 %% Function:   init/1
 %% Purpose:    init fsm state
-%% Params:     ignore
+%% Params:     PhoneNumber to attach in hlr
 %% Returns:    {ok, State, LoopData}
 %%--------------------------------------------------------------------
 init(PhoneNumber) ->
@@ -71,7 +71,9 @@ init(PhoneNumber) ->
 
 %%--------------------------------------------------------------------
 %% Function:   idle/2
-%% Purpose:    Phone fsm is idle
+%% Purpose:    Phone fsm is in idle state
+%%			   The events that are processed: inbound
+%%			   The action that are processed: stop, connect, disconnect, outbound
 %% Params:     Event to handle, LoopData is pid of phone connected to fsm
 %% Returns:    {ok, Reply, LoopData}
 %%--------------------------------------------------------------------
@@ -101,7 +103,9 @@ idle(_, ConnectedDevices) ->
 
 %%--------------------------------------------------------------------
 %% Function:   calling/2
-%% Purpose:    Phone fsm is in calling mode
+%% Purpose:    Phone fsm is in calling state
+%%			   The events that are processed: accept, reject, busy
+%%			   The action that are processed: hangup
 %% Params:     Event to handle, ConnectedDevices holds pid of phone 
 %%             connected to fsm and the currently connected phone fsm
 %% Returns:    {ok, Reply, LoopData}
@@ -127,7 +131,9 @@ calling({_,_,FromPid}, ConnectedDevices) ->
 
 %%--------------------------------------------------------------------
 %% Function:   receiving/2
-%% Purpose:    Phone fsm is in receiving mode
+%% Purpose:    Phone fsm is in receiving state
+%%			   The events that are processed: hangup
+%%			   The action that are processed: accept, reject
 %% Params:     Event to handle, ConnectedDevices holds pid of phone 
 %%             connected to fsm and the currently connected phone fsm
 %% Returns:    {ok, Reply, LoopData}
@@ -149,7 +155,9 @@ receiving({_,_,FromPid}, ConnectedDevices) ->
 
 %%--------------------------------------------------------------------
 %% Function:   connected/2
-%% Purpose:    Phone fsm is in connected mode
+%% Purpose:    Phone fsm is in connected state
+%%			   The events that are processed: hangup
+%%			   The action that are processed: hangup
 %% Params:     Event to handle, ConnectedDevices holds pid of phone 
 %%             connected to fsm and the currently connected phone fsm
 %% Returns:    {ok, Reply, LoopData}

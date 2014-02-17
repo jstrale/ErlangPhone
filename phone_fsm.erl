@@ -13,7 +13,7 @@
 -export([start_link/1]).
 
 %% gen_fsm callbacks
--export([init/1, idle/2, state_name/3, handle_event/3,
+-export([init/1, idle/2, calling/2, receiving/2, connected/2, handle_event/3,
 	 handle_sync_event/4, handle_info/3, terminate/3, code_change/4]).
 %% client functions
 -export([stop/1, connect/1, disconnect/1, action/2]).
@@ -42,16 +42,16 @@ start_link(PhoneNumber) ->
 stop(FsmPid) -> gen_fsm:send_event(FsmPid, stop).
 connect(FsmPid) -> gen_fsm:send_event(FsmPid, {connect, self()}).
 disconnect(FsmPid) -> gen_fsm:send_event(FsmPid, {disconnect, self()}).
-action(FsmPid, Action) -> gen_fsm:send_event(FsmPid, {action, Action}).
+action(FsmPid, Action) -> gen_fsm:send_event(FsmPid, {action, Action, self()}).
 
 %%%===================================================================
 %%% Internal events
 %%%===================================================================
 
-busy(FsmPid) -> gen_fsm:send_event(FsmPid, {event, busy}).
-reject(FsmPid) -> gen_fsm:send_event(FsmPid, {event, reject}).
-accept(FsmPid) -> gen_fsm:send_event(FsmPid, {event, accept}).
-hangup(FsmPid) -> gen_fsm:send_event(FsmPid, {event, hangup}).
+busy(FsmPid) -> gen_fsm:send_event(FsmPid, {event, busy, self()}).
+reject(FsmPid) -> gen_fsm:send_event(FsmPid, {event, reject, self()}).
+accept(FsmPid) -> gen_fsm:send_event(FsmPid, {event, accept, self()}).
+hangup(FsmPid) -> gen_fsm:send_event(FsmPid, {event, hangup, self()}).
 inbound(FsmPid) -> gen_fsm:send_event(FsmPid, {event, inbound, self()}).
 
 
@@ -83,53 +83,88 @@ idle(_, null) ->
 	{next_state, idle, null};
 idle({disconnect, _PhonePid}, _ConnectedDevices) ->
 	{next_state, idle, null};
-idle({action, {outbound, PhoneNumber}}, ConnectedDevices) ->
+idle({action, {outbound, PhoneNumber}, _FromPid}, ConnectedDevices) ->
 	case hlr:lookup_id(PhoneNumber) of
 		{ok, ToPid} -> inbound(ToPid),
-					   {next_state, calling, ConnectedDevices};
+			       {next_state, calling, ConnectedDevices#data{fsmPid=ToPid}};
 		{error, invalid} -> phone:reply(ConnectedDevices#data.phonePid, invalid),
-							{next_state, idle, ConnectedPhone}
+				    {next_state, idle, ConnectedDevices}
 	end;
 idle({event, inbound, FromPid}, ConnectedDevices) ->
 	case hlr:lookup_phone(FromPid) of
-		{ok, FromNumber} -> phone:reply(ConnectedDevices#data.phonePid, FromNumber),
-							{next_state, receiving, ConnectedDevices#data{fsmPid=FromPid}};
-		{error, invalid} -> {next_state, idle, ConnectedPhone}
+	    {ok, FromNumber} -> phone:reply(ConnectedDevices#data.phonePid, {inbound, FromNumber}),
+				{next_state, receiving, ConnectedDevices#data{fsmPid=FromPid}};
+		{error, invalid} -> {next_state, idle, ConnectedDevices}
 	end;
 idle(_, ConnectedDevices) ->
 	{next_state, idle, ConnectedDevices}.
 
-	
+%%--------------------------------------------------------------------
+%% Function:   calling/2
+%% Purpose:    Phone fsm is in calling mode
+%% Params:     Event to handle, ConnectedDevices holds pid of phone 
+%%             connected to fsm and the currently connected phone fsm
+%% Returns:    {ok, Reply, LoopData}
+%%--------------------------------------------------------------------
+calling({action, hangup, _FromPid}, ConnectedDevices) ->
+    hangup(ConnectedDevices#data.fsmPid),
+    {next_state, idle, ConnectedDevices#data{fsmPid=null}};
+calling({event, accept, FromPid}, ConnectedDevices) when FromPid == ConnectedDevices#data.fsmPid ->
+    phone:reply(ConnectedDevices#data.phonePid, accept),
+    {next_state, connected, ConnectedDevices};
+calling({event, reject, FromPid}, ConnectedDevices) when FromPid == ConnectedDevices#data.fsmPid ->
+    phone:reply(ConnectedDevices#data.phonePid, reject),
+    {next_state, idle, ConnectedDevices#data{fsmPid=null}};
+calling({event, busy, FromPid}, ConnectedDevices) when FromPid == ConnectedDevices#data.fsmPid ->
+    phone:reply(ConnectedDevices#data.phonePid, busy),
+    {next_state, idle, ConnectedDevices#data{fsmPid=null}};
+calling({_,_,FromPid}, ConnectedDevices) when FromPid == ConnectedDevices#data.phonePid ->
+    {next_state, calling, ConnectedDevices};
+calling({_,_,FromPid}, ConnectedDevices) ->
+    busy(FromPid),
+    {next_state, calling, ConnectedDevices}.
+						 
 
 %%--------------------------------------------------------------------
-%% Function:   init/1
-%% Purpose:    init ets table
-%% Params:     ignore
-%% Returns:    {reply, Reply, LoopData}
+%% Function:   receiving/2
+%% Purpose:    Phone fsm is in receiving mode
+%% Params:     Event to handle, ConnectedDevices holds pid of phone 
+%%             connected to fsm and the currently connected phone fsm
+%% Returns:    {ok, Reply, LoopData}
 %%--------------------------------------------------------------------
-state_name(_Event, _From, State) ->
-    Reply = ok,
-    {reply, Reply, state_name, State}.
+receiving({event, hangup, FromPid}, ConnectedDevices) when FromPid == ConnectedDevices#data.fsmPid ->
+    phone:reply(ConnectedDevices#data.phonePid, hangup),
+    {next_state, idle, ConnectedDevices#data{fsmPid=null}};
+receiving({action, accept, _FromPid}, ConnectedDevices) ->
+    accept(ConnectedDevices#data.fsmPid),
+    {next_state, connected, ConnectedDevices};  
+receiving({action, reject, _FromPid}, ConnectedDevices) ->
+    reject(ConnectedDevices#data.fsmPid),
+    {next_state, idle, ConnectedDevices#data{fsmPid=null}};
+receiving({_,_,FromPid}, ConnectedDevices) when FromPid == ConnectedDevices#data.phonePid ->
+    {next_state, receiving, ConnectedDevices}; 
+receiving({_,_,FromPid}, ConnectedDevices) ->
+    busy(FromPid),
+    {next_state, receiving, ConnectedDevices}.
 
 %%--------------------------------------------------------------------
-%% Function:   init/1
-%% Purpose:    init ets table
-%% Params:     ignore
-%% Returns:    {reply, Reply, LoopData}
+%% Function:   connected/2
+%% Purpose:    Phone fsm is in connected mode
+%% Params:     Event to handle, ConnectedDevices holds pid of phone 
+%%             connected to fsm and the currently connected phone fsm
+%% Returns:    {ok, Reply, LoopData}
 %%--------------------------------------------------------------------
-handle_event(_Event, StateName, State) ->
-    {next_state, StateName, State}.
-
-%%--------------------------------------------------------------------
-%% Function:   init/1
-%% Purpose:    init ets table
-%% Params:     ignore
-%% Returns:    {reply, Reply, LoopData}
-%%--------------------------------------------------------------------
-handle_sync_event(_Event, _From, StateName, State) ->
-    Reply = ok,
-    {reply, Reply, StateName, State}.
-
+connected({action, hangup, _FromPid}, ConnectedDevices) ->
+    hangup(ConnectedDevices#data.fsmPid),
+    {next_state, idle, ConnectedDevices#data{fsmPid=null}};
+connected({event, hangup, FromPid}, ConnectedDevices) when FromPid == ConnectedDevices#data.fsmPid ->
+    phone:reply(ConnectedDevices#data.phonePid, hangup),
+    {next_state, idle, ConnectedDevices#data{fsmPid=null}};
+connected({_,_,FromPid}, ConnectedDevices) when FromPid == ConnectedDevices#data.fsmPid ->
+    {next_state, connected, ConnectedDevices};
+connected({_,_,FromPid}, ConnectedDevices) ->
+    busy(FromPid),
+    {next_state, connected, ConnectedDevices}.
 
 %%--------------------------------------------------------------------
 %% Function:   terminate/3
@@ -137,8 +172,7 @@ handle_sync_event(_Event, _From, StateName, State) ->
 %% Params:     ignore
 %% Returns:    ok
 %%--------------------------------------------------------------------
-terminate(_Reason, _StateName, LoopData) ->
-	io:format("ConnectedPhone: ~w~n",[LoopData]),
+terminate(_Reason, _StateName, _LoopData) ->
 	hlr:detach().
 
 %%%===================================================================
@@ -148,3 +182,8 @@ code_change(_OldVsn, StateName, State, _Extra) ->
     {ok, StateName, State}.
 handle_info(_Info, StateName, State) ->
     {next_state, StateName, State}.
+handle_event(_Event, StateName, State) ->
+    {next_state, StateName, State}.
+handle_sync_event(_Event, _From, StateName, State) ->
+    Reply = ok,
+    {reply, Reply, StateName, State}.

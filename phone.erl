@@ -80,14 +80,14 @@ handle_cast({action,Action}, #st{contr=Fsm}=St) ->
 handle_cast({reply,Reply}, #st{num=Num}=St) ->
     %% This gives us a check of Reply.
     {F,As} = case Reply of
-		 {inbound,Number} -> {"inbound call from ~s",[Number]};
+		 {inbound,Number} -> {"inbound call from ~p",[Number]};
 		 accept -> {"call accepted",[]};
 		 reject -> {"call rejected",[]};
 		 hangup -> {"remote hangup",[]};
 		 busy -> {"busy",[]};
 		 invalid -> {"invalid call",[]}
 	     end,
-    io:format("~p: ~s: " ++ F ++ "\n", [self(),Num|As]),
+    io:format("~p: ~p: " ++ F ++ "\n", [self(),Num|As]),
     {noreply,St}.
 
 %% Unused callbacks.
